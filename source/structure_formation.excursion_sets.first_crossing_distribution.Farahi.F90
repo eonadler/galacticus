@@ -1,5 +1,5 @@
 !! Copyright 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018,
-!!           2019, 2020, 2021, 2022
+!!           2019, 2020, 2021
 !!    Andrew Benson <abenson@carnegiescience.edu>
 !!
 !! This file is part of Galacticus.
@@ -156,38 +156,41 @@ Contains a module which implements a excursion set first crossing statistics cla
      class           (excursionSetBarrierClass     ), pointer                       :: excursionSetBarrier_             => null()
      class           (cosmologicalMassVarianceClass), pointer                       :: cosmologicalMassVariance_        => null()
      ! Variables used in tabulation the first crossing function.
-     double precision                                                               :: timeMaximum                                , timeMinimum             , &
+     double precision                                                               :: timeMaximum                               , timeMinimum             , &
           &                                                                            varianceMaximum
-     integer                                                                        :: timeTableCount                             , varianceTableCount
+     integer                                                                        :: timeTableCount                            , varianceTableCount
      double precision                               , allocatable, dimension(:,:)   :: firstCrossingProbabilityTable
-     double precision                               , allocatable, dimension(:  )   :: timeTable                                  , varianceTable
+     double precision                               , allocatable, dimension(:  )   :: timeTable                                 , varianceTable
      double precision                                                               :: varianceTableStep
-     logical                                                                        :: tableInitialized                 =  .false., fileNameInitialized
-     type            (interpolator                 ), allocatable                   :: interpolatorTime                           , interpolatorVariance
+     logical                                                                        :: tableInitialized                          , fileNameInitialized
+     type            (interpolator                 ), allocatable                   :: interpolatorTime                          , interpolatorVariance
      ! Variables used in tabulation the first crossing rate function.
-     double precision                                                               :: timeMaximumRate                            , timeMinimumRate         , &
+     double precision                                                               :: timeMaximumRate                           , timeMinimumRate         , &
           &                                                                            varianceMaximumRate
-     integer                                                                        :: timeTableCountRate                         , varianceTableCountRate  , &
+     integer                                                                        :: timeTableCountRate                        , varianceTableCountRate  , &
           &                                                                            varianceTableCountRateBase
      double precision                               , allocatable, dimension(:,:,:) :: firstCrossingTableRate
      double precision                               , allocatable, dimension(:,:  ) :: nonCrossingTableRate
-     double precision                               , allocatable, dimension(:    ) :: timeTableRate                              ,  varianceTableRate       , &
+     double precision                               , allocatable, dimension(:    ) :: timeTableRate                             , varianceTableRate       , &
           &                                                                            varianceTableRateBase
-     logical                                                                        :: tableInitializedRate             =  .false.
-     type            (interpolator                 ), allocatable                   :: interpolatorTimeRate                       , interpolatorVarianceRate, &
+     logical                                                                        :: tableInitializedRate
+     type            (interpolator                 ), allocatable                   :: interpolatorTimeRate                      , interpolatorVarianceRate, &
           &                                                                            interpolatorVarianceRateBase
      ! File name used to store tabulations.
      type            (varying_string               )                                :: fileName
      logical                                                                        :: useFile
      ! Tabulation resolutions.
-     integer                                                                        :: varianceNumberPerUnitProbability           , varianceNumberPerUnit   , &
-          &                                                                            timeNumberPerDecade                        , varianceNumberPerDecade
+     integer                                                                        :: varianceNumberPerUnitProbability          , varianceNumberPerUnit   , &
+          &                                                                            timeNumberPerDecade                       , varianceNumberPerDecade
      ! The fractional step in time used to compute barrier crossing rates.
      double precision                                                               :: timeStepFractional
+     ! Parameters for constrained excursion set solution
+     double precision                                                               :: delta2
+     double precision                                                               :: S2
      ! Record of variance and time in previous call to rate functions.
-     double precision                                                               :: timeRatePrevious                           , varianceRatePrevious
-     double precision                                            , dimension(0:1)   :: hTimeRate                                  , hVarianceRate
-     integer         (c_size_t                     )                                :: iTimeRate                                  , iVarianceRate
+     double precision                                                               :: timeRatePrevious                          , varianceRatePrevious
+     double precision                                            , dimension(0:1)   :: hTimeRate                                 , hVarianceRate
+     integer         (c_size_t                     )                                :: iTimeRate                                 , iVarianceRate
    contains
      !![
      <methods>
@@ -234,6 +237,8 @@ contains
     class           (excursionSetBarrierClass       ), pointer       :: excursionSetBarrier_
     class           (cosmologicalMassVarianceClass  ), pointer       :: cosmologicalMassVariance_
     double precision                                                 :: timeStepFractional
+    double precision                                                 :: delta2
+    double precision                                                 :: S2
     integer                                                          :: varianceNumberPerUnitProbability, varianceNumberPerUnit  , &
          &                                                              timeNumberPerDecade             , varianceNumberPerDecade
     type            (varying_string                 )                :: fileName
@@ -250,6 +255,18 @@ contains
       <defaultValue>0.01d0</defaultValue>
       <source>parameters</source>
       <description>The fractional time step used when computing barrier crossing rates (i.e. the step used in finite difference calculations).</description>
+    </inputParameter>
+    <inputParameter>
+      <name>delta2</name>
+      <defaultValue>1.686d0</defaultValue>
+      <source>parameters</source>
+      <description>Density fluctuation for constrained excursion set problem.</description>
+    </inputParameter>
+    <inputParameter>
+      <name>S2</name>
+      <defaultValue>1.0d0</defaultValue>
+      <source>parameters</source>
+      <description>Variance for constrained excursion set problem.</description>
     </inputParameter>
     <inputParameter>
       <name>varianceNumberPerUnitProbability</name>
@@ -279,7 +296,7 @@ contains
     <objectBuilder class="excursionSetBarrier"      name="excursionSetBarrier_"      source="parameters"/>
     <objectBuilder class="cosmologicalMassVariance" name="cosmologicalMassVariance_" source="parameters"/>
     !!]
-    self=excursionSetFirstCrossingFarahi(timeStepFractional,fileName,varianceNumberPerUnitProbability,varianceNumberPerUnit,varianceNumberPerDecade,timeNumberPerDecade,cosmologyFunctions_,excursionSetBarrier_,cosmologicalMassVariance_)
+    self=excursionSetFirstCrossingFarahi(timeStepFractional,delta2,S2,fileName,varianceNumberPerUnitProbability,varianceNumberPerUnit,varianceNumberPerDecade,timeNumberPerDecade,cosmologyFunctions_,excursionSetBarrier_,cosmologicalMassVariance_)
     !![
     <inputParametersValidate source="parameters"/>
     <objectDestructor name="cosmologyFunctions_"      />
@@ -289,13 +306,15 @@ contains
     return
   end function farahiConstructorParameters
 
-  function farahiConstructorInternal(timeStepFractional,fileName,varianceNumberPerUnitProbability,varianceNumberPerUnit,varianceNumberPerDecade,timeNumberPerDecade,cosmologyFunctions_,excursionSetBarrier_,cosmologicalMassVariance_) result(self)
+  function farahiConstructorInternal(timeStepFractional,delta2,S2,fileName,varianceNumberPerUnitProbability,varianceNumberPerUnit,varianceNumberPerDecade,timeNumberPerDecade,cosmologyFunctions_,excursionSetBarrier_,cosmologicalMassVariance_) result(self)
     !!{
     Internal constructor for the Farahi excursion set class first crossing class.
     !!}
     implicit none
     type            (excursionSetFirstCrossingFarahi)                        :: self
     double precision                                 , intent(in   )         :: timeStepFractional
+    double precision                                 , intent(in   )         :: delta2
+    double precision                                 , intent(in   )         :: S2
     integer                                          , intent(in   )         :: varianceNumberPerUnitProbability, varianceNumberPerUnit  , &
          &                                                                      timeNumberPerDecade             , varianceNumberPerDecade
     type            (varying_string                 ), intent(in   )         :: fileName
@@ -303,7 +322,7 @@ contains
     class           (excursionSetBarrierClass       ), intent(in   ), target :: excursionSetBarrier_
     class           (cosmologicalMassVarianceClass  ), intent(in   ), target :: cosmologicalMassVariance_
     !![
-    <constructorAssign variables="timeStepFractional, fileName, varianceNumberPerUnitProbability, varianceNumberPerUnit, varianceNumberPerDecade, timeNumberPerDecade, *cosmologyFunctions_, *excursionSetBarrier_, *cosmologicalMassVariance_"/>
+    <constructorAssign variables="timeStepFractional, delta2, S2, fileName, varianceNumberPerUnitProbability, varianceNumberPerUnit, varianceNumberPerDecade, timeNumberPerDecade, *cosmologyFunctions_, *excursionSetBarrier_, *cosmologicalMassVariance_"/>
     !!]
 
     self%tableInitialized                  =.false.
@@ -311,6 +330,7 @@ contains
     self%timeMaximum                       =-huge(0.0d0)
     self%timeMinimum                       =+huge(0.0d0)
     self%varianceMaximum                   =      0.0d0
+    !self%varianceMaximum                   = self%S2
     self%timeMaximumRate                   =-huge(0.0d0)
     self%timeMinimumRate                   =+huge(0.0d0)
     self%varianceMaximumRate               =-huge(0.0d0)
@@ -412,7 +432,8 @@ contains
           if (allocated(self%varianceTable                )) call deallocateArray(self%varianceTable                )
           if (allocated(self%timeTable                    )) call deallocateArray(self%timeTable                    )
           if (allocated(self%firstCrossingProbabilityTable)) call deallocateArray(self%firstCrossingProbabilityTable)
-          self%varianceMaximum   =max(self%varianceMaximum,variance)
+          !self%varianceMaximum   =max(self%varianceMaximum,variance)
+          self%varianceMaximum   =0.95d0*self%S2
           self%varianceTableCount=int(self%varianceMaximum*dble(self%varianceNumberPerUnitProbability))
           if (self%tableInitialized) then
              self%timeMinimum=min(      self%timeMinimum                                          ,0.5d0*time)
